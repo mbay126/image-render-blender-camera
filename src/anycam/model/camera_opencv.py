@@ -31,9 +31,10 @@ For questions, refer to
 Annika Hagemann (CR/AEC3) annika.hagemann@de.bosch.com
 """
 
+import math
+
 import numpy as np
 from numpy.polynomial.polynomial import Polynomial as Poly
-import math
 
 
 ######################################################################################################
@@ -313,7 +314,11 @@ def undistort(_aRays, _fK1, _fK2, _fK3):
 
 ######################################################################################################
 def create_lookup(
-    _tSensorSizeXY, _tFocLenXY, _tImgCtrXY, _tDistRad, _bBlenderFormat=True
+    _tSensorSizeXY,
+    _tFocLenXY,
+    _tImgCtrXY,
+    _tDistRad,
+    _bBlenderFormat=True,
 ):
     """Creates a projection rays mask for a pair of camera  _tIntrinsics and sensor size.
 
@@ -328,20 +333,23 @@ def create_lookup(
         numpy.ndarray: projection rays for each image pixel. Shape is (H, W, 3).
         If _bBlenderFormat is set to False, the shape is (3, WxH).
     """
-
     # Only flip z-axis for Blender, as y-axis is flipped implicitly,
     # when using numpy array as Blender generated image.
     aRot_x_180 = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]])
 
+    # The y axis is pointing downwards. Adjust the vertical centre accordingly.
+    _tImgCtrXY_opencv = (_tImgCtrXY[0], _tSensorSizeXY[1] - _tImgCtrXY[1])
+
     # get image coordinates of each pixel. Use pixel center point for ray
     # formation.
-    aV = np.arange(0, _tSensorSizeXY[1], 1) + 0.5  # vertical image direction
-    aU = np.arange(0, _tSensorSizeXY[0], 1) + 0.5  # horizontal image direction
+    aV = np.arange(-0.5, _tSensorSizeXY[1] + 1, 1)  # vertical image direction
+    aU = np.arange(-0.5, _tSensorSizeXY[0] + 1, 1)  # horizontal image direction
+
     aU_grid, aV_grid = np.meshgrid(aU, aV)
     aUv = np.array([np.ravel(aU_grid), np.ravel(aV_grid)])
 
     # get viewing rays of each pixel
-    aRays = inverse_opencv_radial(aUv, _tFocLenXY, _tImgCtrXY, _tDistRad)
+    aRays = inverse_opencv_radial(aUv, _tFocLenXY, _tImgCtrXY_opencv, _tDistRad)
 
     # Legacy return for verification purposes
     if not _bBlenderFormat:
@@ -353,7 +361,7 @@ def create_lookup(
 
     # Transform rays to blender's camera CS. Shape [H, W, 3].
     aRays_reshaped = np.moveaxis(
-        np.reshape(aRays, (3, _tSensorSizeXY[1], _tSensorSizeXY[0])), 0, 2
+        np.reshape(aRays, (3, _tSensorSizeXY[1] + 2, _tSensorSizeXY[0] + 2)), 0, 2
     )
 
     aRays_blender_cs = np.squeeze(aRot_x_180 @ np.expand_dims(aRays_reshaped, -1))
@@ -362,8 +370,8 @@ def create_lookup(
     aNorm[aNorm == 0] = 1
     aRays_normalized = aRays_blender_cs / np.expand_dims(aNorm, -1)
 
-    iImgCtrX = int(_tImgCtrXY[0])
-    iImgCtrY = int(_tImgCtrXY[1])
+    iImgCtrX = int(_tImgCtrXY_opencv[0])
+    iImgCtrY = int(_tImgCtrXY_opencv[1])
 
     aRayLeft = aRays_normalized[iImgCtrY, 0, :]
     aRayRight = aRays_normalized[iImgCtrY, _tSensorSizeXY[0] - 1, :]
@@ -397,7 +405,7 @@ def verify_inverse_model():
 
     tSensor_Size = (1936, 1216)  # (width, height)
     tFocLenXY = (1500.0, 1500.0)
-    tImgCtrXY = (968.0, 608.0)
+    tImgCtrXY = (988.0, 620.0)
     tDistRad = (-0.7, -0.2, -0.2)
 
     aRays = create_lookup(
@@ -406,11 +414,19 @@ def verify_inverse_model():
 
     aMask_invalid = aRays[2, :] == 0
     aUv_backprojected = opencv_radial(
-        aRays[:, ~aMask_invalid], tFocLenXY, tImgCtrXY, tDistRad
+        aRays[:, ~aMask_invalid],
+        tFocLenXY,
+        (tImgCtrXY[0], tSensor_Size[1] - tImgCtrXY[1]),
+        tDistRad,
     )
 
-    aV = np.arange(0, tSensor_Size[1], 1) + 0.5  # vertical image direction
-    aU = np.arange(0, tSensor_Size[0], 1) + 0.5  # horizontal image direction
+    step = 1
+    aV = np.arange(
+        -0.5 * step, tSensor_Size[1] + 1 * step, step
+    )  # vertical image direction
+    aU = np.arange(
+        -0.5 * step, tSensor_Size[0] + 1 * step, step
+    )  # horizontal image direction
     aU_grid, aV_grid = np.meshgrid(aU, aV)
     aUv_original = np.array([np.ravel(aU_grid), np.ravel(aV_grid)])
 
